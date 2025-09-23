@@ -1,53 +1,232 @@
 import streamlit as st
-from openai import OpenAI
+import pandas as pd
+import numpy as np
+import re
 
-# Show title and description.
-st.title("📄 Document question answering")
-st.write(
-    "Upload a document below and ask a question about it – GPT will answer! "
-    "To use this app, you need to provide an OpenAI API key, which you can get [here](https://platform.openai.com/account/api-keys). "
-)
+# --- Page setup ---
+st.set_page_config(page_title="Data Inspector", layout="wide")
 
-# Ask user for their OpenAI API key via `st.text_input`.
-# Alternatively, you can store the API key in `./.streamlit/secrets.toml` and access it
-# via `st.secrets`, see https://docs.streamlit.io/develop/concepts/connections/secrets-management
-openai_api_key = st.text_input("OpenAI API Key", type="password")
-if not openai_api_key:
-    st.info("Please add your OpenAI API key to continue.", icon="🗝️")
+# --- Sidebar upload ---
+st.sidebar.title("Upload")
+uploaded_file = st.sidebar.file_uploader("Upload a file", type=["csv", "xlsx"])
+
+# --- Helper functions ---
+NUM_REGEX = r"^\d+\.?\d*$"
+
+def column_conditions(column, df, buttons):
+    if buttons == 'is null':
+        return df[df[column].isnull()]
+    elif buttons == 'is not null':
+        return df[df[column].notnull()]
+    elif buttons == 'is duplicated':
+        return df[df.duplicated(subset=column)]
+    elif buttons == 'drop duplicates':
+        return df.drop_duplicates(subset=column)
+    else:
+        return df
+
+def regex_conditions(fields, df, regex):
+    indices = []
+    for f in fields:
+        if regex == "is not null":
+            indices.extend(df[df[f].notnull()].index)
+        elif regex == "extra spaces":
+            indices.extend(df[df[f].astype(str).str.contains(r"\s{2,}", regex=True)].index)
+        elif regex == "leading or trailing spaces":
+            indices.extend(df[df[f].astype(str).str.match(r"^\s|\s$", na=False)].index)
+        elif regex == "missing spaces":
+            indices.extend(df[df[f].astype(str).str.contains(r"\S\S", regex=True)].index)
+        else:
+            indices.extend(df.index)
+    return df.loc[indices]
+
+def display_sample_structured(df, n=1):
+    """Display sample(s) in key: value format."""
+    sample_df = df.sample(min(n, len(df)))
+    for _, row in sample_df.iterrows():
+        for col, val in row.items():
+            st.markdown(f"**{col}**  \n{val}")
+        st.markdown("---")  # separator between samples
+
+def spacecheck_ui(dfr, url_column):
+    results = []
+    for index, row in dfr.iterrows():
+        for i in row.keys():
+            val = str(row[i])
+            if re.search(r'\s$', val):
+                results.append((i, "Trailing space", val, row[url_column]))
+            if re.search(r'^\s', val):
+                results.append((i, "Leading space", val, row[url_column]))
+            if re.search(r'\s\s', val):
+                results.append((i, "Extra spaces", val, row[url_column]))
+            if re.search(r'<.*>', val):
+                results.append((i, "HTML Tag", val, row[url_column]))
+    return pd.DataFrame(results, columns=["Column", "Issue", "Value", url_column])
+
+# --- Main app ---
+if uploaded_file is not None:
+    # Load file
+    if uploaded_file.name.endswith(".csv"):
+        df = pd.read_csv(uploaded_file, dtype='object')
+    if uploaded_file.name.endswith(".xlsx"):
+        df = pd.read_excel(uploaded_file, dtype= 'object')
+
+    st.title("Inspect Data")
+
+    tabs = st.tabs([
+        "Basic Info", "Preview", "Formating checks", 
+        "Unique Values", "Match", "Explore", "Group by"
+    ])
+
+    # --- Basic Info ---
+    
+    with tabs[0]:
+            st.write("**Filename:**", uploaded_file.name if uploaded_file else "No file uploaded")
+
+    # Display number of rows and columns
+            st.write("**Number of Rows:**", df.shape[0])
+            st.write("**Number of Columns:**", df.shape[1])
+
+        #   st.write("**Columns:**")
+        #    for col in df.columns:
+        #        st.text(col)
+
+    # Display describe statistics
+            st.write("**Summary Statistics:**")
+            st.dataframe(df.describe(include="all").T, use_container_width=True)
+
+
+    # --- Preview ---
+    with tabs[1]:
+        st.subheader("Preview Data")
+        st.dataframe(df, use_container_width=True)
+
+    # --- Match ---
+    with tabs[4]:
+        st.subheader("Filter Data by Column Values")
+
+    # Select up to 3 columns
+        match_cols = st.multiselect("Choose up to 3 column(s) to match", df.columns, max_selections=3)
+
+        match_values = []
+        match_modes = []
+
+    # Input values and match mode for each selected column
+        for col in match_cols:
+            val = st.text_input(f"Value to match in '{col}'", key=f"match_{col}")
+            match_values.append(val)
+            mode = st.selectbox(f"Match mode for '{col}'", ["equals", "contains"], key=f"mode_{col}")
+            match_modes.append(mode)
+
+        if st.button("Filter Data"):
+            filtered_df = df.copy()
+            for col, val, mode in zip(match_cols, match_values, match_modes):
+                if val.strip() != "":
+                    if mode == "equals":
+                        filtered_df = filtered_df[filtered_df[col].astype(str) == val.strip()]
+                    elif mode == "contains":
+                        filtered_df = filtered_df[filtered_df[col].astype(str).str.contains(val.strip(), na=False)]
+            st.write(f"Filtered Data ({len(filtered_df)} rows):")
+            st.dataframe(filtered_df, use_container_width=True)
+
+    # --- Group By ---
+    with tabs[6]:
+        st.subheader("Group By / Summarize")
+
+        # Select columns to group by
+        group_cols = st.multiselect("Choose column(s) to group by", df.columns)
+
+        # Select aggregation columns (all columns allowed)
+        agg_cols = st.multiselect("Choose column(s) to aggregate", df.columns)
+
+        # Select aggregation functions per column
+        agg_funcs = {}
+        for col in agg_cols:
+            if np.issubdtype(df[col].dtype, np.number):
+                options = ["sum", "mean", "min", "max", "count", "median", "std"]
+            else:
+                options = ["count"]  # Non-numeric columns can only use count
+            agg_funcs[col] = st.selectbox(f"Aggregation for {col}", options, key=f"agg_{col}")
+
+        if st.button("Run GroupBy"):
+            if group_cols and agg_cols:
+                # Perform groupby aggregation
+                grouped = df.groupby(group_cols).agg(agg_funcs)
+
+                # Flatten MultiIndex if exists (for multiple agg functions)
+                if isinstance(grouped.columns, pd.MultiIndex):
+                    grouped.columns = ['_'.join(filter(None, map(str, col))).strip() for col in grouped.columns]
+
+                # Ensure aggregated columns do not clash with group_cols
+                final_cols = []
+                existing_cols = set(group_cols)
+                for col in grouped.columns:
+                    col_name = col
+                    counter = 1
+                    while col_name in existing_cols:
+                        col_name = f"{col}_{counter}"
+                        counter += 1
+                    final_cols.append(col_name)
+                    existing_cols.add(col_name)
+                grouped.columns = final_cols
+
+                # Reset index after renaming to avoid conflicts
+                grouped_df = grouped.reset_index()
+                st.dataframe(grouped_df, use_container_width=True)
+            elif group_cols:
+                grouped_df = df.groupby(group_cols).size().reset_index(name="Count")
+                st.dataframe(grouped_df, use_container_width=True)
+            else:
+                st.warning("Please select at least one column to group by.")
+
+    # --- Explore ---
+    with tabs[5]:
+        st.subheader("Explore Data")
+
+        col_filter = st.selectbox("Choose column for condition", df.columns)
+        col_condition = st.radio("Condition", ['is null', 'is not null', 'is duplicated', 'drop duplicates'])
+
+        regex_filter_columns = st.multiselect("Columns for regex checks", df.columns)
+        regex_option = st.selectbox("Regex option", ["is not null", "extra spaces", "leading or trailing spaces", "missing spaces"])
+
+        do_sample = st.checkbox("View Sample")
+
+        filtered_df = column_conditions(col_filter, df, col_condition)
+        if regex_filter_columns:
+            filtered_df = regex_conditions(regex_filter_columns, filtered_df, regex_option)
+
+        if do_sample:
+            display_sample_structured(filtered_df, n=1)
+        else:
+            st.dataframe(filtered_df, use_container_width=True)
+
+    # --- Text Checks ---
+    with tabs[2]:
+        st.subheader("Text Checks for Spaces / HTML Tags")
+        url_col = st.selectbox("Select column to display as URL/reference", df.columns)
+        if st.button("Run Checks"):
+            results_df = spacecheck_ui(df, url_col)
+            st.dataframe(results_df, use_container_width=True)
+
+    # --- Unique Values with Next Button ---
+    with tabs[3]:
+        st.subheader("View Unique Values Per Column")
+
+        if "col_index" not in st.session_state:
+            st.session_state.col_index = 0
+
+        col_index = st.session_state.col_index
+        column_name = df.columns[col_index]
+
+        st.write(f"**Column ({col_index + 1}/{len(df.columns)}): {column_name}**")
+        unique_values = df[column_name].dropna().unique()
+        st.dataframe(pd.DataFrame(unique_values, columns=[column_name]), use_container_width=True)
+
+        if st.button("Next Column"):
+            if st.session_state.col_index < len(df.columns) - 1:
+                st.session_state.col_index += 1
+            else:
+                st.session_state.col_index = 0  # loop back to first column
+
 else:
-
-    # Create an OpenAI client.
-    client = OpenAI(api_key=openai_api_key)
-
-    # Let the user upload a file via `st.file_uploader`.
-    uploaded_file = st.file_uploader(
-        "Upload a document (.txt or .md)", type=("txt", "md")
-    )
-
-    # Ask the user for a question via `st.text_area`.
-    question = st.text_area(
-        "Now ask a question about the document!",
-        placeholder="Can you give me a short summary?",
-        disabled=not uploaded_file,
-    )
-
-    if uploaded_file and question:
-
-        # Process the uploaded file and question.
-        document = uploaded_file.read().decode()
-        messages = [
-            {
-                "role": "user",
-                "content": f"Here's a document: {document} \n\n---\n\n {question}",
-            }
-        ]
-
-        # Generate an answer using the OpenAI API.
-        stream = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            stream=True,
-        )
-
-        # Stream the response to the app using `st.write_stream`.
-        st.write_stream(stream)
+    st.info("Please upload a CSV or Excel file to begin.")
