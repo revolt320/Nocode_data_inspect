@@ -1,19 +1,21 @@
-# 📄 Document question answering template
+# Custom Data Inspection Tool (Streamlit)
 
-A simple Streamlit app that answers questions about an uploaded document via OpenAI's GPT-3.5.
+A custom data inspection tool built with Streamlit is an interactive web application that allows users to upload, explore, and analyze datasets without needing to write code.
 
-[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://document-question-answering-template.streamlit.app/)
+It typically provides features such as:
 
-### How to run it on your own machine
+File Upload – Supports CSV, Excel, or other formats for importing datasets.
 
-1. Install the requirements
+Basic Information – Displays filename, number of rows, columns, column names, and data types.
 
-   ```
-   $ pip install -r requirements.txt
-   ```
+Data Preview – Shows a scrollable or paginated view of the dataset.
 
-2. Run the app
+Summary Statistics – Automatically computes descriptive statistics (mean, median, min/max, counts, nulls, etc.) for numerical and categorical columns.
 
-   ```
-   $ streamlit run streamlit_app.py
-   ```
+Unique Value Analysis – Lists distinct values in a column, along with frequencies (useful for categorical exploration).
+
+Filtering Options – Lets users apply conditions like “equals,” “contains,” “is null,” etc., to subset the data dynamically.
+
+Group & Aggregation – Enables summarizing data by grouping columns and applying aggregate functions (sum, average, count, etc.).
+
+Find the self hosted page here: https://explore.streamlit.app/
