@@ -10,6 +10,27 @@ st.set_page_config(page_title="Data Inspector", layout="wide")
 st.sidebar.title("Upload")
 uploaded_file = st.sidebar.file_uploader("Upload a file", type=["csv", "xlsx"])
 
+# --- Sheet selector for Excel files ---
+df = None
+sheet_name = None
+
+if uploaded_file is not None:
+    if uploaded_file.name.endswith(".xlsx"):
+        # Read Excel file to get sheet names
+        excel_file = pd.ExcelFile(uploaded_file)
+        sheet_names = excel_file.sheet_names
+        
+        if len(sheet_names) > 1:
+            sheet_name = st.sidebar.selectbox("Select Sheet", sheet_names)
+        else:
+            sheet_name = sheet_names[0]
+        
+        st.sidebar.write(f"**Selected Sheet:** {sheet_name}")
+        df = pd.read_excel(uploaded_file, sheet_name=sheet_name, dtype='object')
+        
+    elif uploaded_file.name.endswith(".csv"):
+        df = pd.read_csv(uploaded_file, dtype='object')
+
 # --- Helper functions ---
 NUM_REGEX = r"^\d+\.?\d*$"
 
@@ -64,13 +85,7 @@ def spacecheck_ui(dfr, url_column):
     return pd.DataFrame(results, columns=["Column", "Issue", "Value", url_column])
 
 # --- Main app ---
-if uploaded_file is not None:
-    # Load file
-    if uploaded_file.name.endswith(".csv"):
-        df = pd.read_csv(uploaded_file, dtype='object')
-    if uploaded_file.name.endswith(".xlsx"):
-        df = pd.read_excel(uploaded_file, dtype= 'object')
-
+if uploaded_file is not None and df is not None:
     st.title("Inspect Data")
 
     tabs = st.tabs([
@@ -79,39 +94,47 @@ if uploaded_file is not None:
     ])
 
     # --- Basic Info ---
-    
     with tabs[0]:
-            st.write("**Filename:**", uploaded_file.name if uploaded_file else "No file uploaded")
+        st.write("**Filename:**", uploaded_file.name)
+        if sheet_name:
+            st.write("**Sheet Name:**", sheet_name)
 
-    # Display number of rows and columns
-            st.write("**Number of Rows:**", df.shape[0])
-            st.write("**Number of Columns:**", df.shape[1])
+        # Display number of rows and columns
+        st.write("**Number of Rows:**", df.shape[0])
+        st.write("**Number of Columns:**", df.shape[1])
 
-        #   st.write("**Columns:**")
-        #    for col in df.columns:
-        #        st.text(col)
+        # Display available sheets for Excel files
+        if uploaded_file.name.endswith(".xlsx"):
+            excel_file = pd.ExcelFile(uploaded_file)
+            st.write("**Available Sheets:**")
+            for i, sheet in enumerate(excel_file.sheet_names, 1):
+                if sheet == sheet_name:
+                    st.write(f"  {i}. **{sheet}** *(current)*")
+                else:
+                    st.write(f"  {i}. {sheet}")
 
-    # Display describe statistics
-            st.write("**Summary Statistics:**")
-            st.dataframe(df.describe(include="all").T, use_container_width=True)
-
+        # Display summary statistics
+        st.write("**Summary Statistics:**")
+        st.dataframe(df.describe(include="all").T, use_container_width=True)
 
     # --- Preview ---
     with tabs[1]:
         st.subheader("Preview Data")
+        if sheet_name:
+            st.write(f"*Showing data from sheet: {sheet_name}*")
         st.dataframe(df, use_container_width=True)
 
     # --- Match ---
     with tabs[4]:
         st.subheader("Filter Data by Column Values")
 
-    # Select up to 3 columns
+        # Select up to 3 columns
         match_cols = st.multiselect("Choose up to 3 column(s) to match", df.columns, max_selections=3)
 
         match_values = []
         match_modes = []
 
-    # Input values and match mode for each selected column
+        # Input values and match mode for each selected column
         for col in match_cols:
             val = st.text_input(f"Value to match in '{col}'", key=f"match_{col}")
             match_values.append(val)
@@ -212,10 +235,12 @@ if uploaded_file is not None:
     with tabs[3]:
         st.subheader("View Unique Values Per Column")
 
-        if "col_index" not in st.session_state:
-            st.session_state.col_index = 0
+        # Create unique session state key based on sheet name to reset column index when sheet changes
+        sheet_key = f"col_index_{sheet_name}" if sheet_name else "col_index"
+        if sheet_key not in st.session_state:
+            st.session_state[sheet_key] = 0
 
-        col_index = st.session_state.col_index
+        col_index = st.session_state[sheet_key]
         column_name = df.columns[col_index]
 
         st.write(f"**Column ({col_index + 1}/{len(df.columns)}): {column_name}**")
@@ -223,10 +248,10 @@ if uploaded_file is not None:
         st.dataframe(pd.DataFrame(unique_values, columns=[column_name]), use_container_width=True)
 
         if st.button("Next Column"):
-            if st.session_state.col_index < len(df.columns) - 1:
-                st.session_state.col_index += 1
+            if st.session_state[sheet_key] < len(df.columns) - 1:
+                st.session_state[sheet_key] += 1
             else:
-                st.session_state.col_index = 0  # loop back to first column
+                st.session_state[sheet_key] = 0  # loop back to first column
 
 else:
     st.info("Please upload a CSV or Excel file to begin.")
