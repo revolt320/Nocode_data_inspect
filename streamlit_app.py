@@ -6,30 +6,55 @@ import re
 # --- Page setup ---
 st.set_page_config(page_title="Data Inspector", layout="wide")
 
+# --- Check for required dependencies ---
+def check_excel_support():
+    try:
+        import openpyxl
+        return True
+    except ImportError:
+        return False
+
 # --- Sidebar upload ---
 st.sidebar.title("Upload")
-uploaded_file = st.sidebar.file_uploader("Upload a file", type=["csv", "xlsx"])
+
+# Adjust file types based on available dependencies
+if check_excel_support():
+    uploaded_file = st.sidebar.file_uploader("Upload a file", type=["csv", "xlsx"])
+else:
+    st.sidebar.warning("⚠️ Excel support not available. Please install openpyxl to read Excel files.")
+    uploaded_file = st.sidebar.file_uploader("Upload a file", type=["csv"])
 
 # --- Sheet selector for Excel files ---
 df = None
 sheet_name = None
 
 if uploaded_file is not None:
-    if uploaded_file.name.endswith(".xlsx"):
-        # Read Excel file to get sheet names
-        excel_file = pd.ExcelFile(uploaded_file)
-        sheet_names = excel_file.sheet_names
-        
-        if len(sheet_names) > 1:
-            sheet_name = st.sidebar.selectbox("Select Sheet", sheet_names)
-        else:
-            sheet_name = sheet_names[0]
-        
-        st.sidebar.write(f"**Selected Sheet:** {sheet_name}")
-        df = pd.read_excel(uploaded_file, sheet_name=sheet_name, dtype='object')
-        
-    elif uploaded_file.name.endswith(".csv"):
-        df = pd.read_csv(uploaded_file, dtype='object')
+    try:
+        if uploaded_file.name.endswith(".xlsx"):
+            if not check_excel_support():
+                st.error("❌ Cannot read Excel files. Please install the 'openpyxl' library or upload a CSV file instead.")
+                st.info("To install openpyxl, run: `pip install openpyxl`")
+                st.stop()
+            
+            # Read Excel file to get sheet names
+            excel_file = pd.ExcelFile(uploaded_file)
+            sheet_names = excel_file.sheet_names
+            
+            if len(sheet_names) > 1:
+                sheet_name = st.sidebar.selectbox("Select Sheet", sheet_names)
+            else:
+                sheet_name = sheet_names[0]
+            
+            st.sidebar.write(f"**Selected Sheet:** {sheet_name}")
+            df = pd.read_excel(uploaded_file, sheet_name=sheet_name, dtype='object')
+            
+        elif uploaded_file.name.endswith(".csv"):
+            df = pd.read_csv(uploaded_file, dtype='object')
+            
+    except Exception as e:
+        st.error(f"❌ Error reading file: {str(e)}")
+        st.info("Please check that your file is properly formatted and try again.")
+        st.stop()
 
 # --- Helper functions ---
 NUM_REGEX = r"^\d+\.?\d*$"
