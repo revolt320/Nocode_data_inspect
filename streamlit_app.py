@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import re
 import io
+import requests  # ✅ For API testing
 
 # --- Page setup ---
 st.set_page_config(page_title="Data Inspector", layout="wide")
@@ -59,6 +60,8 @@ if uploaded_file is not None:
         st.stop()
 
 # --- Helper functions ---
+NUM_REGEX = r"^\d+\.?\d*$"
+
 def column_conditions(column, df, buttons):
     if buttons == 'is null':
         return df[df[column].isnull()]
@@ -101,18 +104,21 @@ def spacecheck_ui(dfr, url_column):
 
     for index, row in dfr.iterrows():
         for i in row.keys():
-            val = str(row[i]) if pd.notnull(row[i]) else ""
+            val = str(row[i])
+
             if re.search(r'\s$', val):
                 results.append((i, "Trailing space", val, row[url_column]))
             if re.search(r'^\s', val):
                 results.append((i, "Leading space", val, row[url_column]))
             if re.search(r'\s\s', val):
                 results.append((i, "Extra spaces", val, row[url_column]))
-            elif re.search(r'<.*>', val):
+            if re.search(r'<.*>', val):
                 results.append((i, "HTML Tag", val, row[url_column]))
-            # You disabled Unicode detection – kept commented for now.
-            # if hidden_unicode_pattern.search(val):
-            #     results.append((i, "Hidden Unicode character", val, row[url_column]))
+            if hidden_unicode_pattern.search(val):
+                results.append((i, "Hidden Unicode character", val, row[url_column]))
+            elif re.search(r'[^\x00-\x7F]', val):
+                results.append((i, "Unicode character found", val, row[url_column]))
+
     return pd.DataFrame(results, columns=["Column", "Issue", "Value", url_column])
 
 # --- Main app ---
@@ -121,7 +127,8 @@ if uploaded_file is not None and df is not None:
 
     tabs = st.tabs([
         "Basic Info", "Preview", "Formating checks",
-        "Unique Values", "Match", "Explore", "Group by", "Generate Dataset"
+        "Unique Values", "Match", "Explore", "Group by",
+        "API Tester (Postman Preview)", "Generate Dataset"
     ])
 
     # --- Basic Info ---
@@ -225,7 +232,7 @@ if uploaded_file is not None and df is not None:
         agg_cols = st.multiselect("Choose column(s) to aggregate", df.columns)
         agg_funcs = {}
         for col in agg_cols:
-            if np.issubdtype(df[col].dropna().infer_objects().dtype, np.number):
+            if np.issubdtype(df[col].dtype, np.number):
                 options = ["sum", "mean", "min", "max", "count", "median", "std"]
             else:
                 options = ["count"]
@@ -235,6 +242,7 @@ if uploaded_file is not None and df is not None:
                 grouped = df.groupby(group_cols).agg(agg_funcs)
                 if isinstance(grouped.columns, pd.MultiIndex):
                     grouped.columns = ['_'.join(filter(None, map(str, col))).strip() for col in grouped.columns]
+                grouped.columns = [f"{col}" for col in grouped.columns]
                 grouped_df = grouped.reset_index()
                 st.dataframe(grouped_df, use_container_width=True)
             elif group_cols:
@@ -243,10 +251,46 @@ if uploaded_file is not None and df is not None:
             else:
                 st.warning("Please select at least one column to group by.")
 
-    # --- Generate Dataset ---
+    # --- API Tester (Postman Preview) ---
     with tabs[7]:
-        st.subheader("Generate Dataset")
+        st.subheader("API Tester (Postman Preview)")
+        st.write("Use this section to send GET requests and inspect API responses (like Postman).")
 
+        url = st.text_input("Enter API URL (GET):", placeholder="https://api.example.com/data")
+
+        st.markdown("**Add Query Parameters (optional):**")
+        num_params = st.number_input("Number of parameters", min_value=0, max_value=10, value=0, step=1)
+
+        params = {}
+        for i in range(num_params):
+            col1, col2 = st.columns(2)
+            with col1:
+                key = st.text_input(f"Parameter {i+1} Name", key=f"param_key_{i}")
+            with col2:
+                value = st.text_input(f"Parameter {i+1} Value", key=f"param_value_{i}")
+            if key:
+                params[key] = value
+
+        if st.button("Send GET Request"):
+            if not url.strip():
+                st.error("Please enter a valid API URL.")
+            else:
+                try:
+                    response = requests.get(url, params=params, timeout=10)
+                    st.write("**Status Code:**", response.status_code)
+
+                    try:
+                        json_data = response.json()
+                        st.json(json_data)
+                    except Exception:
+                        st.text_area("Response Text:", response.text, height=300)
+
+                except Exception as e:
+                    st.error(f"❌ Error sending request: {e}")
+
+    # --- Generate Sample Dataset ---
+    with tabs[8]:
+        st.subheader("Generate Dataset")
         default_filename = uploaded_file.name if uploaded_file else "sample_output.csv"
         filename = st.text_input("Enter output filename (without extension):", value=default_filename.split(".")[0])
         export_format = st.selectbox("Select export format", ["csv", "xlsx", "json"])
@@ -262,11 +306,11 @@ if uploaded_file is not None and df is not None:
 
         clean_text = st.checkbox("Clean extra spaces and remove hidden/unwanted Unicode characters")
 
-
         num_rows = st.number_input(
-        "Number of rows for the sample dataset:",
-        min_value=1,
-        value=max(1, len(df))
+            "Number of rows for the sample dataset:",
+            min_value=1,
+            max_value=len(df),
+            value=len(df)
         )
 
         st.write("Filter out rows that **do not match** given conditions (up to 3 columns):")
@@ -282,12 +326,9 @@ if uploaded_file is not None and df is not None:
 
         if st.button("Generate File"):
             sample_df = df.copy()
-
-            # Remove columns
             if cols_to_remove:
                 sample_df = sample_df.drop(columns=cols_to_remove, errors='ignore')
 
-            # Remove duplicates
             if remove_dupes:
                 if dupe_columns:
                     sample_df = sample_df.drop_duplicates(subset=dupe_columns)
@@ -295,19 +336,15 @@ if uploaded_file is not None and df is not None:
                     sample_df = sample_df.drop_duplicates()
                 st.success(f"✅ Removed duplicates. Remaining rows: {len(sample_df)}")
 
-            # Clean spaces and hidden Unicode
             if clean_text:
                 hidden_unicode_pattern = re.compile(
                     r'[\u2000-\u200F\u202A-\u202E\u2060\u205F\u00A0\u180E\uFEFF\u3000]'
                 )
-                for col in sample_df.columns:
-                    if sample_df[col].dtype == object:
-                        sample_df[col] = sample_df[col].astype(str).fillna("").apply(
-                            lambda x: hidden_unicode_pattern.sub("", x.strip())
-                        )
-                        sample_df[col] = sample_df[col].str.replace(r'\s+', ' ', regex=True)
+                for col in sample_df.select_dtypes(include=['object']).columns:
+                    sample_df[col] = sample_df[col].astype(str).str.strip()
+                    sample_df[col] = sample_df[col].str.replace(r'\s+', ' ', regex=True)
+                    sample_df[col] = sample_df[col].apply(lambda x: hidden_unicode_pattern.sub('', x))
 
-            # Filter mismatches
             for col, val, mode in zip(mismatch_cols, mismatch_values, mismatch_conditions):
                 if val.strip() != "":
                     if mode == "equals":
@@ -315,10 +352,8 @@ if uploaded_file is not None and df is not None:
                     elif mode == "contains":
                         sample_df = sample_df[~sample_df[col].astype(str).str.contains(val.strip(), na=False)]
 
-            # Sample rows
             sample_df = sample_df.sample(n=min(num_rows, len(sample_df)))
 
-            # Prepare download
             output_filename = f"{filename}.{export_format}"
             if export_format == "csv":
                 file_data = sample_df.to_csv(index=False).encode("utf-8")
