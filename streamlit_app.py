@@ -117,16 +117,16 @@ def spacecheck_ui(dfr, url_column):
             if re.search(r'\s\s', val):
                 results.append((i, "Extra spaces", val, row[url_column]))
 
-            if re.search(r'<.*>', val):
+            elif re.search(r'<.*>', val):
                 results.append((i, "HTML Tag", val, row[url_column]))
 
             # --- Hidden / zero-width Unicode detection ---
-            if hidden_unicode_pattern.search(val):
-                results.append((i, "Hidden Unicode character", val, row[url_column]))
+            #if hidden_unicode_pattern.search(val):
+               # results.append((i, "Hidden Unicode character", val, row[url_column]))
 
             # --- General non-ASCII characters (emojis, accents, etc.) ---
-            elif re.search(r'[^\x00-\x7F]', val):
-                results.append((i, "Unicode character found", val, row[url_column]))
+            #elif re.search(r'[^\x00-\x7F]', val):
+                #results.append((i, "Unicode character found", val, row[url_column]))
 
     return pd.DataFrame(results, columns=["Column", "Issue", "Value", url_column])
 
