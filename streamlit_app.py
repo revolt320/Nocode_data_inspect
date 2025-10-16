@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import re
 import io
-import requests  # ✅ For API testing
 
 # --- Page setup ---
 st.set_page_config(page_title="Data Inspector", layout="wide")
@@ -98,6 +97,8 @@ def display_sample_structured(df, n=1):
 
 def spacecheck_ui(dfr, url_column):
     results = []
+
+    # --- Hidden / unwanted Unicode characters pattern ---
     hidden_unicode_pattern = re.compile(
         r'[\u2000-\u200F\u202A-\u202E\u2060\u205F\u00A0\u180E\uFEFF\u3000]'
     )
@@ -106,16 +107,24 @@ def spacecheck_ui(dfr, url_column):
         for i in row.keys():
             val = str(row[i])
 
+            # --- Space and HTML checks ---
             if re.search(r'\s$', val):
                 results.append((i, "Trailing space", val, row[url_column]))
+
             if re.search(r'^\s', val):
                 results.append((i, "Leading space", val, row[url_column]))
+
             if re.search(r'\s\s', val):
                 results.append((i, "Extra spaces", val, row[url_column]))
+
             if re.search(r'<.*>', val):
                 results.append((i, "HTML Tag", val, row[url_column]))
+
+            # --- Hidden / zero-width Unicode detection ---
             if hidden_unicode_pattern.search(val):
                 results.append((i, "Hidden Unicode character", val, row[url_column]))
+
+            # --- General non-ASCII characters (emojis, accents, etc.) ---
             elif re.search(r'[^\x00-\x7F]', val):
                 results.append((i, "Unicode character found", val, row[url_column]))
 
@@ -127,8 +136,7 @@ if uploaded_file is not None and df is not None:
 
     tabs = st.tabs([
         "Basic Info", "Preview", "Formating checks",
-        "Unique Values", "Match", "Explore", "Group by",
-        "API Tester (Postman Preview)", "Generate Dataset"
+        "Unique Values", "Match", "Explore", "Group by", "Generate Dataset"
     ])
 
     # --- Basic Info ---
@@ -242,7 +250,17 @@ if uploaded_file is not None and df is not None:
                 grouped = df.groupby(group_cols).agg(agg_funcs)
                 if isinstance(grouped.columns, pd.MultiIndex):
                     grouped.columns = ['_'.join(filter(None, map(str, col))).strip() for col in grouped.columns]
-                grouped.columns = [f"{col}" for col in grouped.columns]
+                final_cols = []
+                existing_cols = set(group_cols)
+                for col in grouped.columns:
+                    col_name = col
+                    counter = 1
+                    while col_name in existing_cols:
+                        col_name = f"{col}_{counter}"
+                        counter += 1
+                    final_cols.append(col_name)
+                    existing_cols.add(col_name)
+                grouped.columns = final_cols
                 grouped_df = grouped.reset_index()
                 st.dataframe(grouped_df, use_container_width=True)
             elif group_cols:
@@ -251,46 +269,11 @@ if uploaded_file is not None and df is not None:
             else:
                 st.warning("Please select at least one column to group by.")
 
-    # --- API Tester (Postman Preview) ---
-    with tabs[7]:
-        st.subheader("API Tester (Postman Preview)")
-        st.write("Use this section to send GET requests and inspect API responses (like Postman).")
-
-        url = st.text_input("Enter API URL (GET):", placeholder="https://api.example.com/data")
-
-        st.markdown("**Add Query Parameters (optional):**")
-        num_params = st.number_input("Number of parameters", min_value=0, max_value=10, value=0, step=1)
-
-        params = {}
-        for i in range(num_params):
-            col1, col2 = st.columns(2)
-            with col1:
-                key = st.text_input(f"Parameter {i+1} Name", key=f"param_key_{i}")
-            with col2:
-                value = st.text_input(f"Parameter {i+1} Value", key=f"param_value_{i}")
-            if key:
-                params[key] = value
-
-        if st.button("Send GET Request"):
-            if not url.strip():
-                st.error("Please enter a valid API URL.")
-            else:
-                try:
-                    response = requests.get(url, params=params, timeout=10)
-                    st.write("**Status Code:**", response.status_code)
-
-                    try:
-                        json_data = response.json()
-                        st.json(json_data)
-                    except Exception:
-                        st.text_area("Response Text:", response.text, height=300)
-
-                except Exception as e:
-                    st.error(f"❌ Error sending request: {e}")
-
+    
     # --- Generate Sample Dataset ---
-    with tabs[8]:
+    with tabs[7]:
         st.subheader("Generate Dataset")
+
         default_filename = uploaded_file.name if uploaded_file else "sample_output.csv"
         filename = st.text_input("Enter output filename (without extension):", value=default_filename.split(".")[0])
         export_format = st.selectbox("Select export format", ["csv", "xlsx", "json"])
@@ -304,13 +287,14 @@ if uploaded_file is not None and df is not None:
             dupe_columns = st.multiselect("Select column(s) to check for duplicates", df.columns)
             st.info("If no columns are selected, all columns will be considered for duplicate removal.")
 
+        # --- New option: Clean extra spaces and remove hidden Unicode ---
         clean_text = st.checkbox("Clean extra spaces and remove hidden/unwanted Unicode characters")
 
         num_rows = st.number_input(
             "Number of rows for the sample dataset:",
             min_value=1,
             max_value=len(df),
-            value=len(df)
+            value=len(df)  # default value is the existing number of rows
         )
 
         st.write("Filter out rows that **do not match** given conditions (up to 3 columns):")
@@ -336,14 +320,15 @@ if uploaded_file is not None and df is not None:
                     sample_df = sample_df.drop_duplicates()
                 st.success(f"✅ Removed duplicates. Remaining rows: {len(sample_df)}")
 
+            # --- Clean extra spaces and remove hidden/unicode ---
             if clean_text:
                 hidden_unicode_pattern = re.compile(
                     r'[\u2000-\u200F\u202A-\u202E\u2060\u205F\u00A0\u180E\uFEFF\u3000]'
                 )
                 for col in sample_df.select_dtypes(include=['object']).columns:
-                    sample_df[col] = sample_df[col].astype(str).str.strip()
-                    sample_df[col] = sample_df[col].str.replace(r'\s+', ' ', regex=True)
-                    sample_df[col] = sample_df[col].apply(lambda x: hidden_unicode_pattern.sub('', x))
+                    sample_df[col] = sample_df[col].astype(str).str.strip()  # remove leading/trailing spaces
+                    sample_df[col] = sample_df[col].str.replace(r'\s+', ' ', regex=True)  # replace multiple spaces with single
+                    sample_df[col] = sample_df[col].apply(lambda x: hidden_unicode_pattern.sub('', x))  # remove hidden/unicode
 
             for col, val, mode in zip(mismatch_cols, mismatch_values, mismatch_conditions):
                 if val.strip() != "":
@@ -376,6 +361,7 @@ if uploaded_file is not None and df is not None:
                 mime=mime
             )
             st.dataframe(sample_df, use_container_width=True)
+
 
 else:
     st.info("Please upload a CSV, Excel, or JSON file to begin.")
