@@ -290,11 +290,15 @@ if uploaded_file is not None and df is not None:
         # --- New option: Clean extra spaces and remove hidden Unicode ---
         clean_text = st.checkbox("Clean extra spaces and remove hidden/unwanted Unicode characters")
 
+        # Ensure we have at least 1 row for the input
+        default_rows = max(1, len(df))
+        max_rows = max(1, len(df))
+        
         num_rows = st.number_input(
             "Number of rows for the sample dataset:",
             min_value=1,
-            max_value=len(df),
-            value=len(df)  # default value is the existing number of rows
+            max_value=max_rows,
+            value=default_rows  # default value is the existing number of rows
         )
 
         st.write("Filter out rows that **do not match** given conditions (up to 3 columns):")
